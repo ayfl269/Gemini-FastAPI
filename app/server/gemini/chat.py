@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import List
@@ -261,7 +262,13 @@ async def generate_content(
 
     # Text
     if response.text:
-        response_parts.append(Part(text=response.text))
+        text_content = response.text
+        # Filter out raw image URLs if they appear in the text
+        text_content = re.sub(r'https?://googleusercontent\.com/\S*', '', text_content)
+        text_content = re.sub(r'http+://googleusercontent\.com/\S*', '', text_content)
+        
+        if text_content.strip():
+            response_parts.append(Part(text=text_content))
 
     # Images
     if response.images:
@@ -308,6 +315,7 @@ async def stream_generate_content(
     request: GenerateContentRequest,
     api_key: str = Depends(verify_gemini_api_key),
     temp_dir: Path = Depends(get_temp_dir),
+    image_store: Path = Depends(get_image_store_dir),
     alt: str | None = Query(default=None),
 ):
     """
@@ -348,6 +356,10 @@ async def stream_generate_content(
 
             first = True
             previous_text = ""
+            sent_image_count = 0
+            
+            # Buffer for handling split URLs
+            text_buffer = ""
 
             # Keep track for usage
             prompt_tokens = estimate_tokens(input_text)
@@ -362,8 +374,63 @@ async def stream_generate_content(
                     # Fallback if it doesn't start with previous (shouldn't happen usually)
                     delta = current_text
                     previous_text = current_text
+                
+                # Append delta to buffer
+                text_buffer += delta
+                
+                # Remove known bad URLs from buffer
+                # Standard https
+                text_buffer = re.sub(r'https?://googleusercontent\.com/\S*', '', text_buffer)
+                # Malformed httphttp
+                text_buffer = re.sub(r'http+://googleusercontent\.com/\S*', '', text_buffer)
 
-                if delta:
+                parts = []
+                
+                # Determine what to yield from buffer
+                # Strategy: Yield everything up to the last whitespace (or safe delimiter),
+                # keeping the last partial word in buffer to catch split URLs.
+                # If buffer gets too long without whitespace, we might force yield if it doesn't look like our target URL.
+                
+                to_yield = ""
+                # Find last whitespace
+                last_space_match = list(re.finditer(r'\s', text_buffer))
+                if last_space_match:
+                    last_space_idx = last_space_match[-1].end()
+                    to_yield = text_buffer[:last_space_idx]
+                    text_buffer = text_buffer[last_space_idx:]
+                elif len(text_buffer) > 100:
+                     # Buffer too long, likely not a split URL part (unless it's a super long URL)
+                     # But our regex above deletes googleusercontent URLs aggressively.
+                     # So if it's still here, it's either a normal long word or a different URL.
+                     # However, to be safe against "http://googleuser..." being split very late,
+                     # we check if it starts with something suspicious.
+                     if not re.match(r'^https?:?/?/?g?o?o?g?l?e?', text_buffer):
+                         to_yield = text_buffer
+                         text_buffer = ""
+                
+                if to_yield:
+                    parts.append(Part(text=to_yield))
+
+                # Check for images in the chunk
+                if hasattr(chunk, "images") and chunk.images:
+                    if len(chunk.images) > sent_image_count:
+                        new_images = chunk.images[sent_image_count:]
+                        for img in new_images:
+                            try:
+                                b64_str, _, _, _, _ = await image_to_base64(img, image_store)
+                                parts.append(
+                                    Part(
+                                        inline_data=Blob(
+                                            mime_type="image/jpeg",
+                                            data=b64_str
+                                        )
+                                    )
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to process stream image: {e}")
+                        sent_image_count = len(chunk.images)
+
+                if parts:
                     if not is_sse and not first:
                         yield ","
                     first = False
@@ -372,7 +439,7 @@ async def stream_generate_content(
                         candidates=[
                             Candidate(
                                 content=Content(
-                                    parts=[Part(text=delta)],
+                                    parts=parts,
                                     role="model"
                                 ),
                                 finish_reason=None,
@@ -387,6 +454,30 @@ async def stream_generate_content(
                         yield f"data: {json_str}\n\n"
                     else:
                         yield json_str
+            
+            # End of stream, yield remaining buffer
+            # One last check to remove URLs if they were at the very end
+            text_buffer = re.sub(r'https?://googleusercontent\.com/\S*', '', text_buffer)
+            text_buffer = re.sub(r'http+://googleusercontent\.com/\S*', '', text_buffer)
+            
+            if text_buffer:
+                parts = [Part(text=text_buffer)]
+                if not is_sse and not first:
+                     yield ","
+                
+                response_data = GenerateContentResponse(
+                    candidates=[
+                        Candidate(
+                            content=Content(parts=parts, role="model"),
+                            finish_reason=None, index=0, safety_ratings=[]
+                        )
+                    ]
+                )
+                json_str = json.dumps(response_data.model_dump(mode="json", exclude_none=True, by_alias=True))
+                if is_sse:
+                    yield f"data: {json_str}\n\n"
+                else:
+                    yield json_str
 
             # Send one final chunk with finish reason and usage
             if not is_sse and not first:
