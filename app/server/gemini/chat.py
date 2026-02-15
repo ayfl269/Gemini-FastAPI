@@ -266,7 +266,7 @@ async def generate_content(
         # Filter out raw image URLs if they appear in the text
         text_content = re.sub(r'https?://googleusercontent\.com/\S*', '', text_content)
         text_content = re.sub(r'http+://googleusercontent\.com/\S*', '', text_content)
-        
+
         if text_content.strip():
             response_parts.append(Part(text=text_content))
 
@@ -357,7 +357,7 @@ async def stream_generate_content(
             first = True
             previous_text = ""
             sent_image_count = 0
-            
+
             # Buffer for handling split URLs
             text_buffer = ""
 
@@ -374,10 +374,10 @@ async def stream_generate_content(
                     # Fallback if it doesn't start with previous (shouldn't happen usually)
                     delta = current_text
                     previous_text = current_text
-                
+
                 # Append delta to buffer
                 text_buffer += delta
-                
+
                 # Remove known bad URLs from buffer
                 # Standard https
                 text_buffer = re.sub(r'https?://googleusercontent\.com/\S*', '', text_buffer)
@@ -385,12 +385,12 @@ async def stream_generate_content(
                 text_buffer = re.sub(r'http+://googleusercontent\.com/\S*', '', text_buffer)
 
                 parts = []
-                
+
                 # Determine what to yield from buffer
                 # Strategy: Yield everything up to the last whitespace (or safe delimiter),
                 # keeping the last partial word in buffer to catch split URLs.
                 # If buffer gets too long without whitespace, we might force yield if it doesn't look like our target URL.
-                
+
                 to_yield = ""
                 # Find last whitespace
                 last_space_match = list(re.finditer(r'\s', text_buffer))
@@ -407,7 +407,7 @@ async def stream_generate_content(
                      if not re.match(r'^https?:?/?/?g?o?o?g?l?e?', text_buffer):
                          to_yield = text_buffer
                          text_buffer = ""
-                
+
                 if to_yield:
                     parts.append(Part(text=to_yield))
 
@@ -454,17 +454,17 @@ async def stream_generate_content(
                         yield f"data: {json_str}\n\n"
                     else:
                         yield json_str
-            
+
             # End of stream, yield remaining buffer
             # One last check to remove URLs if they were at the very end
             text_buffer = re.sub(r'https?://googleusercontent\.com/\S*', '', text_buffer)
             text_buffer = re.sub(r'http+://googleusercontent\.com/\S*', '', text_buffer)
-            
+
             if text_buffer:
                 parts = [Part(text=text_buffer)]
                 if not is_sse and not first:
                      yield ","
-                
+
                 response_data = GenerateContentResponse(
                     candidates=[
                         Candidate(
