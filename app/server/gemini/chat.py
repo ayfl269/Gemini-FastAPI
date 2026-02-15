@@ -21,13 +21,12 @@ from app.models.gemini import (
     UsageMetadata,
 )
 from app.models.models import ContentItem, Message
+from app.server.common import get_model_by_name, image_to_base64
+from app.server.middleware import get_image_store_dir, get_temp_dir
 from app.services.client import GeminiClientWrapper
 from app.services.pool import GeminiClientPool
 from app.utils import g_config
 from app.utils.helper import estimate_tokens, save_file_to_tempfile
-
-from app.server.common import get_model_by_name, image_to_base64
-from app.server.middleware import get_image_store_dir, get_temp_dir
 
 router = APIRouter()
 
@@ -338,7 +337,7 @@ async def stream_generate_content(
         session = client.start_chat(model=model_obj)
     except Exception as e:
         logger.exception("Failed to acquire Gemini client")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to connect to Gemini: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to connect to Gemini: {e!s}")
 
     is_sse = (alt == "sse")
 
@@ -346,10 +345,10 @@ async def stream_generate_content(
         try:
             if not is_sse:
                 yield "["
-            
+
             first = True
             previous_text = ""
-            
+
             # Keep track for usage
             prompt_tokens = estimate_tokens(input_text)
 
@@ -382,7 +381,7 @@ async def stream_generate_content(
                             )
                         ]
                     )
-                    
+
                     json_str = json.dumps(response_data.model_dump(mode="json", exclude_none=True, by_alias=True))
                     if is_sse:
                         yield f"data: {json_str}\n\n"
@@ -392,7 +391,7 @@ async def stream_generate_content(
             # Send one final chunk with finish reason and usage
             if not is_sse and not first:
                 yield ","
-            
+
             completion_tokens = estimate_tokens(previous_text)
 
             final_response = GenerateContentResponse(
@@ -410,13 +409,13 @@ async def stream_generate_content(
                     total_token_count=prompt_tokens + completion_tokens
                 )
             )
-            
+
             json_str = json.dumps(final_response.model_dump(mode="json", exclude_none=True, by_alias=True))
             if is_sse:
                 yield f"data: {json_str}\n\n"
             else:
                 yield json_str
-                
+
             if not is_sse:
                 yield "]"
 

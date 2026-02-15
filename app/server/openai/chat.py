@@ -38,6 +38,7 @@ from app.models.models import (
     Tool,
     ToolChoiceFunction,
 )
+from app.server.middleware import get_image_store_dir, get_image_token, get_temp_dir, verify_api_key
 from app.services import GeminiClientPool, GeminiClientWrapper, LMDBConversationStore
 from app.utils import g_config
 from app.utils.helper import (
@@ -53,7 +54,6 @@ from app.utils.helper import (
     strip_system_hints,
     text_from_message,
 )
-from app.server.middleware import get_image_store_dir, get_image_token, get_temp_dir, verify_api_key
 
 MAX_CHARS_PER_REQUEST = int(g_config.gemini.max_chars_per_request * 0.9)
 METADATA_TTL_MINUTES = 15
