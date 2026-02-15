@@ -17,7 +17,7 @@ from gemini_webapi.constants import Model
 from gemini_webapi.types.image import GeneratedImage, Image
 from loguru import logger
 
-from ..models import (
+from app.models.models import (
     ChatCompletionRequest,
     ContentItem,
     ConversationInStore,
@@ -38,9 +38,9 @@ from ..models import (
     Tool,
     ToolChoiceFunction,
 )
-from ..services import GeminiClientPool, GeminiClientWrapper, LMDBConversationStore
-from ..utils import g_config
-from ..utils.helper import (
+from app.services import GeminiClientPool, GeminiClientWrapper, LMDBConversationStore
+from app.utils import g_config
+from app.utils.helper import (
     TOOL_HINT_LINE_END,
     TOOL_HINT_LINE_START,
     TOOL_HINT_STRIPPED,
@@ -53,7 +53,7 @@ from ..utils.helper import (
     strip_system_hints,
     text_from_message,
 )
-from .middleware import get_image_store_dir, get_image_token, get_temp_dir, verify_api_key
+from app.server.middleware import get_image_store_dir, get_image_token, get_temp_dir, verify_api_key
 
 MAX_CHARS_PER_REQUEST = int(g_config.gemini.max_chars_per_request * 0.9)
 METADATA_TTL_MINUTES = 15

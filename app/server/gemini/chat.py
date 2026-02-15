@@ -26,8 +26,8 @@ from app.services.pool import GeminiClientPool
 from app.utils import g_config
 from app.utils.helper import estimate_tokens, save_file_to_tempfile
 
-from .chat import _get_model_by_name, _image_to_base64
-from .middleware import get_image_store_dir, get_temp_dir
+from app.server.common import get_model_by_name, image_to_base64
+from app.server.middleware import get_image_store_dir, get_temp_dir
 
 router = APIRouter()
 
@@ -149,7 +149,7 @@ async def list_models(
                 name=f"models/{model_id}",
                 base_model_id=model_id,
                 version="001",
-                display_name=m.name.replace("_", " ").title(),
+                display_name=model_id.replace("-", " ").title(),
                 description=f"Google Gemini model {model_id}",
                 input_token_limit=32768,
                 output_token_limit=8192,
@@ -185,7 +185,7 @@ async def get_model(
         name=f"models/{model_id}",
         base_model_id=model_id,
         version="001",
-        display_name=found_model.name.replace("_", " ").title(),
+        display_name=model_id.replace("-", " ").title(),
         description=f"Google Gemini model {model_id}",
         input_token_limit=32768,
         output_token_limit=8192,
@@ -206,7 +206,7 @@ async def generate_content(
     model_name = model.replace("models/", "")
 
     try:
-        model_obj = _get_model_by_name(model_name)
+        model_obj = get_model_by_name(model_name)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -269,7 +269,7 @@ async def generate_content(
         for img in response.images:
             try:
                 # Convert to base64
-                b64_str, _, _, _, _ = await _image_to_base64(img, image_store)
+                b64_str, _, _, _, _ = await image_to_base64(img, image_store)
                 response_parts.append(
                     Part(
                         inline_data=Blob(
@@ -309,6 +309,7 @@ async def stream_generate_content(
     request: GenerateContentRequest,
     api_key: str = Depends(verify_gemini_api_key),
     temp_dir: Path = Depends(get_temp_dir),
+    alt: str | None = Query(default=None),
 ):
     """
     Generates a streaming response from the model given an input.
@@ -317,7 +318,7 @@ async def stream_generate_content(
 
     # Validate model
     try:
-        model_obj = _get_model_by_name(model_name)
+        model_obj = get_model_by_name(model_name)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -332,15 +333,25 @@ async def stream_generate_content(
     final_files = files + all_files
 
     pool = GeminiClientPool()
+    try:
+        client = await pool.acquire()
+        session = client.start_chat(model=model_obj)
+    except Exception as e:
+        logger.exception("Failed to acquire Gemini client")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to connect to Gemini: {str(e)}")
+
+    is_sse = (alt == "sse")
 
     async def generate_chunks():
         try:
-            client = await pool.acquire()
-            session = client.start_chat(model=model_obj)
-
-            yield "["
+            if not is_sse:
+                yield "["
+            
             first = True
             previous_text = ""
+            
+            # Keep track for usage
+            prompt_tokens = estimate_tokens(input_text)
 
             async for chunk in session.send_message_stream(input_text, files=final_files):
                 current_text = chunk.text
@@ -354,7 +365,7 @@ async def stream_generate_content(
                     previous_text = current_text
 
                 if delta:
-                    if not first:
+                    if not is_sse and not first:
                         yield ","
                     first = False
 
@@ -371,11 +382,18 @@ async def stream_generate_content(
                             )
                         ]
                     )
-                    yield json.dumps(response_data.model_dump(mode="json", exclude_none=True))
+                    
+                    json_str = json.dumps(response_data.model_dump(mode="json", exclude_none=True, by_alias=True))
+                    if is_sse:
+                        yield f"data: {json_str}\n\n"
+                    else:
+                        yield json_str
 
-            # Send one final chunk with finish reason?
-            if not first:
+            # Send one final chunk with finish reason and usage
+            if not is_sse and not first:
                 yield ","
+            
+            completion_tokens = estimate_tokens(previous_text)
 
             final_response = GenerateContentResponse(
                 candidates=[
@@ -385,10 +403,22 @@ async def stream_generate_content(
                         index=0,
                         safety_ratings=[]
                     )
-                ]
+                ],
+                usage_metadata=UsageMetadata(
+                    prompt_token_count=prompt_tokens,
+                    candidates_token_count=completion_tokens,
+                    total_token_count=prompt_tokens + completion_tokens
+                )
             )
-            yield json.dumps(final_response.model_dump(mode="json", exclude_none=True))
-            yield "]"
+            
+            json_str = json.dumps(final_response.model_dump(mode="json", exclude_none=True, by_alias=True))
+            if is_sse:
+                yield f"data: {json_str}\n\n"
+            else:
+                yield json_str
+                
+            if not is_sse:
+                yield "]"
 
         except Exception:
             logger.exception("Error in stream_generate_content")
@@ -396,7 +426,7 @@ async def stream_generate_content(
             # We might yield a JSON error object if the client supports it, or just stop.
             pass
 
-    return StreamingResponse(generate_chunks(), media_type="application/json")
+    return StreamingResponse(generate_chunks(), media_type="text/event-stream" if is_sse else "application/json")
 
 
 @router.post("/v1beta/models/{model}:countTokens")
@@ -411,7 +441,7 @@ async def count_tokens(
     """
     model_name = model.replace("models/", "")
     try:
-        _ = _get_model_by_name(model_name)
+        _ = get_model_by_name(model_name)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

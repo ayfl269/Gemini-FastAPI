@@ -5,8 +5,8 @@ from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 from loguru import logger
 
-from .server.chat import router as chat_router
-from .server.gemini import router as gemini_router
+from .server.openai.chat import router as chat_router
+from .server.gemini.chat import router as gemini_router
 from .server.health import router as health_router
 from .server.images import router as images_router
 from .server.middleware import (
