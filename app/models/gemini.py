@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
@@ -35,7 +35,7 @@ class FileData(CamelBaseModel):
 
 
 class Part(CamelBaseModel):
-    text: Optional[str] = None
+    text: Optional[str] = Field(default=None)
     inline_data: Optional[Blob] = None
     function_call: Optional[FunctionCall] = None
     function_response: Optional[FunctionResponse] = None

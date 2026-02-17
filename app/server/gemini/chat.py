@@ -264,8 +264,10 @@ async def generate_content(
     if response.text:
         text_content = response.text
         # Filter out raw image URLs if they appear in the text
-        text_content = re.sub(r'https?://googleusercontent\.com/\S*', '', text_content)
-        text_content = re.sub(r'http+://googleusercontent\.com/\S*', '', text_content)
+        # Only filter if we actually have images to show, otherwise keep the link
+        if response.images:
+            text_content = re.sub(r'https?://googleusercontent\.com/\S*', '', text_content)
+            text_content = re.sub(r'http+://googleusercontent\.com/\S*', '', text_content)
 
         if text_content.strip():
             response_parts.append(Part(text=text_content))
@@ -360,6 +362,11 @@ async def stream_generate_content(
 
             # Buffer for handling split URLs
             text_buffer = ""
+            pending_urls = []
+
+            # Constants for URL filtering
+            TARGET_URL_PREFIX = "https://googleusercontent.com"
+            TARGET_URL_PREFIX_HTTP = "http://googleusercontent.com"
 
             # Keep track for usage
             prompt_tokens = estimate_tokens(input_text)
@@ -378,35 +385,98 @@ async def stream_generate_content(
                 # Append delta to buffer
                 text_buffer += delta
 
-                # Remove known bad URLs from buffer
-                # Standard https
-                text_buffer = re.sub(r'https?://googleusercontent\.com/\S*', '', text_buffer)
-                # Malformed httphttp
-                text_buffer = re.sub(r'http+://googleusercontent\.com/\S*', '', text_buffer)
-
                 parts = []
-
-                # Determine what to yield from buffer
-                # Strategy: Yield everything up to the last whitespace (or safe delimiter),
-                # keeping the last partial word in buffer to catch split URLs.
-                # If buffer gets too long without whitespace, we might force yield if it doesn't look like our target URL.
-
                 to_yield = ""
-                # Find last whitespace
-                last_space_match = list(re.finditer(r'\s', text_buffer))
-                if last_space_match:
-                    last_space_idx = last_space_match[-1].end()
-                    to_yield = text_buffer[:last_space_idx]
-                    text_buffer = text_buffer[last_space_idx:]
-                elif len(text_buffer) > 100:
-                     # Buffer too long, likely not a split URL part (unless it's a super long URL)
-                     # But our regex above deletes googleusercontent URLs aggressively.
-                     # So if it's still here, it's either a normal long word or a different URL.
-                     # However, to be safe against "http://googleuser..." being split very late,
-                     # we check if it starts with something suspicious.
-                     if not re.match(r'^https?:?/?/?g?o?o?g?l?e?', text_buffer):
-                         to_yield = text_buffer
-                         text_buffer = ""
+
+                # Robust URL extraction and buffering logic
+                # We want to identify and remove Google User Content URLs, while yielding surrounding text.
+                # We must be careful not to split a URL or yield a partial URL.
+
+                # 1. Search for complete URLs in the buffer
+                # Allowed URL chars (excluding CJK to fix issue with Chinese text)
+                # Alphanumeric + -._~:/?#[]@!$&'()*+,;=%
+                url_char_pattern = r"[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]"
+
+                # We loop to find all complete URLs in the current buffer
+                while True:
+                    # Search for start
+                    match_https = re.search(r'https?://googleusercontent\.com', text_buffer)
+                    match_http = re.search(r'http://googleusercontent\.com', text_buffer)
+
+                    match = match_https or match_http
+                    if match_http and match_https:
+                         # Pick the earlier one
+                         if match_http.start() < match_https.start():
+                             match = match_http
+                         else:
+                             match = match_https
+
+                    if match:
+                        start_idx = match.start()
+                        # Check if we have the end of this URL (followed by non-url char or end of string)
+                        # We try to match as many URL chars as possible
+                        rest_of_buffer = text_buffer[start_idx:]
+                        full_match = re.match(r'(https?://googleusercontent\.com' + url_char_pattern + r'*)', rest_of_buffer)
+
+                        if full_match:
+                            url_end_in_rest = full_match.end()
+                            url_end_abs = start_idx + url_end_in_rest
+
+                            # If the match goes to the very end of the buffer, we are not sure if it's finished.
+                            if url_end_abs < len(text_buffer):
+                                # It is finished (followed by something else)
+                                extracted_url = text_buffer[start_idx:url_end_abs]
+                                pending_urls.append(extracted_url)
+
+                                # We can yield everything before the URL
+                                to_yield += text_buffer[:start_idx]
+                                # Remove URL from buffer
+                                text_buffer = text_buffer[url_end_abs:]
+                                # Continue loop to find more URLs in the remaining buffer
+                                continue
+                            else:
+                                # URL is at the end. Incomplete.
+                                # Yield everything before it.
+                                to_yield += text_buffer[:start_idx]
+                                text_buffer = text_buffer[start_idx:]
+                                break
+                        else:
+                            # Should not happen if regex matches start
+                            break
+                    else:
+                        # No URL start found
+                        break
+
+                # 2. Check for partial URL start at the end of buffer
+                # If the buffer ends with "http", "https://g", etc., we must wait.
+                suffix_len = min(len(text_buffer), 30)
+                suffix = text_buffer[-suffix_len:] if suffix_len > 0 else ""
+
+                potential_start_idx = -1
+                if suffix:
+                    for i in range(len(suffix)):
+                        sub = suffix[i:]
+                        # Check against https and http targets
+                        if TARGET_URL_PREFIX.startswith(sub) or TARGET_URL_PREFIX_HTTP.startswith(sub):
+                            potential_start_idx = len(text_buffer) - len(suffix) + i
+                            break
+
+                if potential_start_idx != -1:
+                    # Found partial start, keep it in buffer
+                    to_yield += text_buffer[:potential_start_idx]
+                    text_buffer = text_buffer[potential_start_idx:]
+                else:
+                    # No partial start.
+                    # Yield based on length or delimiters to ensure smooth streaming
+                    # If buffer is long enough (>20 chars), yield it.
+                    # Or if it has a space (for English).
+                    if len(text_buffer) > 20:
+                        to_yield += text_buffer
+                        text_buffer = ""
+                    elif ' ' in text_buffer:
+                         last_space = text_buffer.rfind(' ')
+                         to_yield += text_buffer[:last_space+1]
+                         text_buffer = text_buffer[last_space+1:]
 
                 if to_yield:
                     parts.append(Part(text=to_yield))
@@ -414,12 +484,23 @@ async def stream_generate_content(
                 # Check for images in the chunk
                 if hasattr(chunk, "images") and chunk.images:
                     if len(chunk.images) > sent_image_count:
+                        # We got new images!
+                        # 1. Clear pending URLs as we have better replacements.
+                        pending_urls.clear()
+
+                        # 2. Also clear any such URLs currently sitting in text_buffer
+                        # Use safe regex to avoid eating Chinese characters
+                        url_char_pattern = r"[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]"
+                        text_buffer = re.sub(r'https?://googleusercontent\.com' + url_char_pattern + r'*', '', text_buffer)
+                        text_buffer = re.sub(r'http://googleusercontent\.com' + url_char_pattern + r'*', '', text_buffer)
+
                         new_images = chunk.images[sent_image_count:]
                         for img in new_images:
                             try:
                                 b64_str, _, _, _, _ = await image_to_base64(img, image_store)
                                 parts.append(
                                     Part(
+                                        text="", # Explicitly set empty text to ensure client handles it
                                         inline_data=Blob(
                                             mime_type="image/jpeg",
                                             data=b64_str
@@ -450,25 +531,43 @@ async def stream_generate_content(
                     )
 
                     json_str = json.dumps(response_data.model_dump(mode="json", exclude_none=True, by_alias=True))
+                    # Add newline after json_str to ensure correct parsing by some clients
                     if is_sse:
                         yield f"data: {json_str}\n\n"
                     else:
-                        yield json_str
+                        yield f"{json_str}"
 
             # End of stream, yield remaining buffer
             # One last check to remove URLs if they were at the very end
-            text_buffer = re.sub(r'https?://googleusercontent\.com/\S*', '', text_buffer)
-            text_buffer = re.sub(r'http+://googleusercontent\.com/\S*', '', text_buffer)
-
             if text_buffer:
-                parts = [Part(text=text_buffer)]
+                url_char_pattern = r"[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]"
+                urls = re.findall(r'https?://googleusercontent\.com' + url_char_pattern + r'*', text_buffer)
+                urls += re.findall(r'http://googleusercontent\.com' + url_char_pattern + r'*', text_buffer)
+
+                if urls:
+                    pending_urls.extend(urls)
+                    text_buffer = re.sub(r'https?://googleusercontent\.com' + url_char_pattern + r'*', '', text_buffer)
+                    text_buffer = re.sub(r'http://googleusercontent\.com' + url_char_pattern + r'*', '', text_buffer)
+
+            final_parts = []
+            if text_buffer:
+                final_parts.append(Part(text=text_buffer))
+
+            # If we still have pending URLs (meaning no images came to clear them), yield them.
+            if pending_urls:
+                # Use a set to remove duplicates if any
+                unique_urls = list(set(pending_urls))
+                url_text = " " + " ".join(unique_urls)
+                final_parts.append(Part(text=url_text))
+
+            if final_parts:
                 if not is_sse and not first:
                      yield ","
 
                 response_data = GenerateContentResponse(
                     candidates=[
                         Candidate(
-                            content=Content(parts=parts, role="model"),
+                            content=Content(parts=final_parts, role="model"),
                             finish_reason=None, index=0, safety_ratings=[]
                         )
                     ]
@@ -477,7 +576,7 @@ async def stream_generate_content(
                 if is_sse:
                     yield f"data: {json_str}\n\n"
                 else:
-                    yield json_str
+                    yield f"{json_str}"
 
             # Send one final chunk with finish reason and usage
             if not is_sse and not first:
@@ -505,7 +604,7 @@ async def stream_generate_content(
             if is_sse:
                 yield f"data: {json_str}\n\n"
             else:
-                yield json_str
+                yield f"{json_str}"
 
             if not is_sse:
                 yield "]"
