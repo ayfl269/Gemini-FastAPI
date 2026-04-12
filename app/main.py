@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from loguru import logger
 
 from .server.chat import router as chat_router
+from .server.gemini_chat import router as gemini_router
 from .server.health import router as health_router
 from .server.images import router as images_router
 from .server.middleware import (
@@ -99,6 +100,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router, tags=["Health"])
     app.include_router(chat_router, tags=["Chat"])
+    app.include_router(gemini_router, tags=["Gemini Native"])
     app.include_router(images_router, tags=["Images"])
 
     return app

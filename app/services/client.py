@@ -60,8 +60,15 @@ class GeminiClientWrapper(GeminiClient):
                 verbose=verbose,
             )
         except Exception:
-            logger.exception(f"Failed to initialize GeminiClient {self.id}")
+            logger.exception(f"[{self.id}] GeminiClient init failed")
             raise
+        finally:
+            status = getattr(self, "account_status", None)
+            if status is not None:
+                if status.name == "AVAILABLE":
+                    logger.success(f"[{self.id}] Init OK")
+                else:
+                    logger.warning(f"[{self.id}] Init failed: {status.name} - {status.description}")
 
     def running(self) -> bool:
         return self._running

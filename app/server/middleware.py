@@ -105,6 +105,42 @@ def verify_api_key(
     return api_key
 
 
+async def verify_gemini_api_key(request: Request):
+    """
+    Verify authentication for Google Gemini native API endpoints.
+    Supports multiple authentication methods as per Google's official spec:
+    1. x-goog-api-key header (preferred)
+    2. 'key' query parameter
+    3. Authorization: Bearer <token> header (for OAuth/service accounts)
+    """
+    if not g_config.server.api_key:
+        return ""
+
+    api_key = request.headers.get("x-goog-api-key")
+    if api_key:
+        if api_key == g_config.server.api_key:
+            return api_key
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="API key invalid")
+
+    api_key = request.query_params.get("key")
+    if api_key:
+        if api_key == g_config.server.api_key:
+            return api_key
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="API key invalid")
+
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+        if token == g_config.server.api_key:
+            return token
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid authentication token")
+
+    raise HTTPException(
+        status.HTTP_401_UNAUTHORIZED,
+        detail="No valid API key provided. Use x-goog-api-key header, ?key= query param, or Authorization: Bearer header.",
+    )
+
+
 def add_exception_handler(app: FastAPI):
     app.add_exception_handler(Exception, global_exception_handler)
 

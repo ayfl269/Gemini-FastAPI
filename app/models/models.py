@@ -342,3 +342,149 @@ class ResponseCreateResponse(BaseModel):
 Message.model_rebuild()
 ToolCall.model_rebuild()
 ChatCompletionRequest.model_rebuild()
+
+
+# ============== Google Gemini Native API Models ==============
+
+
+class GeminiPart(BaseModel):
+    """Content part in Gemini API format."""
+
+    text: str | None = Field(default=None)
+    inline_data: dict[str, Any] | None = Field(default=None, alias="inlineData")
+    file_data: dict[str, Any] | None = Field(default=None, alias="fileData")
+    function_call: dict[str, Any] | None = Field(default=None, alias="functionCall")
+    function_response: dict[str, Any] | None = Field(default=None, alias="functionResponse")
+
+    model_config = {"populate_by_name": True}
+
+
+class GeminiContent(BaseModel):
+    """Content object in Gemini API format."""
+
+    role: Literal["user", "model", "function", "system"]
+    parts: list[GeminiPart]
+
+
+class GeminiGenerationConfig(BaseModel):
+    """Generation configuration for Gemini API."""
+
+    temperature: float | None = Field(default=None)
+    top_p: float | None = Field(default=None, alias="topP")
+    top_k: int | None = Field(default=None, alias="topK")
+    max_output_tokens: int | None = Field(default=None, alias="maxOutputTokens")
+    candidate_count: int | None = Field(default=1, alias="candidateCount")
+    stop_sequences: list[str] | None = Field(default=None, alias="stopSequences")
+    response_mime_type: str | None = Field(default=None, alias="responseMimeType")
+    response_schema: dict[str, Any] | None = Field(default=None, alias="responseSchema")
+    presence_penalty: float | None = Field(default=None, alias="presencePenalty")
+    frequency_penalty: float | None = Field(default=None, alias="frequencyPenalty")
+    seed: int | None = Field(default=None)
+    thinking_config: dict[str, Any] | None = Field(default=None, alias="thinkingConfig")
+
+    model_config = {"populate_by_name": True}
+
+
+class GeminiFunctionDeclaration(BaseModel):
+    """Function declaration for Gemini tools."""
+
+    name: str
+    description: str | None = Field(default=None)
+    parameters: dict[str, Any] | None = Field(default=None)
+
+
+class GeminiTool(BaseModel):
+    """Tool specification in Gemini API format."""
+
+    function_declarations: list[GeminiFunctionDeclaration] | None = Field(
+        default=None, alias="functionDeclarations"
+    )
+    code_execution: dict[str, Any] | None = Field(default=None, alias="codeExecution")
+
+    model_config = {"populate_by_name": True}
+
+
+class GeminiSafetySetting(BaseModel):
+    """Safety setting in Gemini API format."""
+
+    category: str
+    threshold: str
+
+
+class GeminiGenerateContentRequest(BaseModel):
+    """Request body for generateContent endpoint."""
+
+    contents: list[GeminiContent]
+    system_instruction: GeminiContent | dict[str, Any] | None = Field(
+        default=None, alias="systemInstruction"
+    )
+    generation_config: GeminiGenerationConfig | None = Field(
+        default=None, alias="generationConfig"
+    )
+    safety_settings: list[GeminiSafetySetting] | None = Field(
+        default=None, alias="safetySettings"
+    )
+    tools: list[GeminiTool] | None = Field(default=None)
+
+    model_config = {"populate_by_name": True}
+
+
+class GeminiCandidate(BaseModel):
+    """Candidate response from Gemini API."""
+
+    content: GeminiContent | None = Field(default=None)
+    finish_reason: str | None = Field(default=None, alias="finishReason")
+    safety_ratings: list[dict[str, Any]] | None = Field(default=None, alias="safetyRatings")
+    citation_metadata: dict[str, Any] | None = Field(default=None, alias="citationMetadata")
+    token_count: int | None = Field(default=None, alias="tokenCount")
+    index: int | None = Field(default=0)
+
+    model_config = {"populate_by_name": True}
+
+
+class GeminiUsageMetadata(BaseModel):
+    """Usage metadata from Gemini API."""
+
+    prompt_token_count: int | None = Field(default=None, alias="promptTokenCount")
+    candidates_token_count: int | None = Field(default=None, alias="candidatesTokenCount")
+    total_token_count: int | None = Field(default=None, alias="totalTokenCount")
+
+    model_config = {"populate_by_name": True}
+
+
+class GeminiGenerateContentResponse(BaseModel):
+    """Response body for generateContent endpoint."""
+
+    candidates: list[GeminiCandidate] | None = Field(default=None)
+    usage_metadata: GeminiUsageMetadata | None = Field(
+        default=None, alias="usageMetadata"
+    )
+    prompt_feedback: dict[str, Any] | None = Field(default=None, alias="promptFeedback")
+    model_version: str | None = Field(default=None, alias="modelVersion")
+
+    model_config = {"populate_by_name": True}
+
+
+class GeminiModelInfo(BaseModel):
+    """Model information for list models response."""
+
+    name: str
+    version: str | None = Field(default=None)
+    display_name: str | None = Field(default=None, alias="displayName")
+    description: str | None = Field(default=None)
+    input_token_limit: int | None = Field(default=None, alias="inputTokenLimit")
+    output_token_limit: int | None = Field(default=None, alias="outputTokenLimit")
+    supported_generation_methods: list[str] | None = Field(
+        default=None, alias="supportedGenerationMethods"
+    )
+
+    model_config = {"populate_by_name": True}
+
+
+class GeminiListModelsResponse(BaseModel):
+    """Response for listing available models."""
+
+    models: list[GeminiModelInfo] | None = Field(default=None)
+    next_page_token: str | None = Field(default=None, alias="nextPageToken")
+
+    model_config = {"populate_by_name": True}
