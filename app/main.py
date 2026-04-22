@@ -117,7 +117,7 @@ async def lifespan(app: FastAPI):
 
     cleanup_task = asyncio.create_task(_run_retention_cleanup(cleanup_stop_event))
     cookie_refresh_task = asyncio.create_task(_run_cookie_refresh(cleanup_stop_event))
-    
+
     # Give the tasks a chance to start and surface immediate failures.
     await asyncio.sleep(0)
     if cleanup_task.done():
