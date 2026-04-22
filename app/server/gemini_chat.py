@@ -444,9 +444,12 @@ async def generate_content(
             tmp_dir=tmp_dir,
             stream=False,
         )
+        _client.record_success()
     except HTTPException:
         raise
     except Exception as e:
+        if _client:
+            _client.record_failure()
         logger.exception("Gemini generateContent error")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
@@ -555,6 +558,8 @@ async def stream_generate_content(
     except HTTPException:
         raise
     except Exception as e:
+        if _client:
+            _client.record_failure()
         logger.exception("Gemini streamGenerateContent error")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
@@ -562,7 +567,6 @@ async def stream_generate_content(
         full_text = ""
         full_thoughts = ""
         all_outputs: list[ModelOutput] = []
-
         try:
             async for chunk in generator:
                 all_outputs.append(chunk)
@@ -587,6 +591,8 @@ async def stream_generate_content(
 
         except Exception as e:
             logger.exception("Error during Gemini streaming")
+            if _client:
+                _client.record_failure()
             error_response = {
                 "error": {
                     "code": 500,
@@ -669,6 +675,9 @@ async def stream_generate_content(
 
         yield f"data: {orjson.dumps(final_response.model_dump(mode='json', by_alias=True)).decode('utf-8')}\n\n"
         yield "data: {}\n\n"
+
+        if _client:
+            _client.record_success()
 
     media_type = "text/event-stream" if alt_param == "sse" else "application/json"
     return StreamingResponse(generate_sse_stream(), media_type=media_type)

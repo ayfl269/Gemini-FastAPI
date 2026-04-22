@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter
 from loguru import logger
 
@@ -31,3 +33,30 @@ async def health_check():
         )
 
     return HealthCheckResponse(ok=all(client_status.values()), storage=stat, clients=client_status)
+
+
+@router.get("/v1beta/clients/status")
+async def get_clients_detailed_status() -> dict[str, Any]:
+    """
+    Get detailed status of all clients in the pool.
+
+    Returns:
+        Dictionary with detailed client health information including:
+        - running status
+        - consecutive failures
+        - total requests/failures
+        - last success time
+        - likelihood of cookie expiration
+        - success rate percentage
+    """
+    pool = GeminiClientPool()
+    detailed = pool.detailed_status()
+
+    healthy_count = sum(1 for v in detailed.values() if v["running"] and not v["likely_expired"])
+
+    return {
+        "total": len(detailed),
+        "healthy": healthy_count,
+        "unhealthy": len(detailed) - healthy_count,
+        "clients": detailed,
+    }

@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -27,6 +28,33 @@ class GeminiClientWrapper(GeminiClient):
     def __init__(self, client_id: str, **kwargs):
         super().__init__(**kwargs)
         self.id = client_id
+        self.last_success_time = time.time()
+        self.consecutive_failures = 0
+        self.total_requests = 0
+        self.total_failures = 0
+        self.last_request_time = 0.0
+
+    def record_success(self):
+        self.last_success_time = time.time()
+        self.consecutive_failures = 0
+        self.total_requests += 1
+
+    def record_failure(self):
+        self.consecutive_failures += 1
+        self.total_requests += 1
+        self.total_failures += 1
+        self.last_request_time = time.time()
+
+    def seconds_since_last_request(self) -> float:
+        if self.last_request_time == 0.0:
+            return float('inf')
+        return time.time() - self.last_request_time
+
+    def is_likely_expired(self) -> bool:
+        if self.consecutive_failures >= 3:
+            return True
+        minutes_since_success = (time.time() - self.last_success_time) / 60
+        return minutes_since_success > 30 and self.consecutive_failures > 0
 
     async def init(
         self,
@@ -204,3 +232,37 @@ class GeminiClientWrapper(GeminiClient):
             text += str(response)
 
         return normalize_llm_text(text)
+
+    async def force_refresh(self) -> bool:
+        """
+        Force refresh the client's cookies by re-initializing.
+
+        This is used when the client becomes unresponsive due to expired cookies.
+
+        Returns:
+            bool: True if refresh was successful, False otherwise.
+        """
+        logger.info(f"[{self.id}] Forcing cookie refresh...")
+        try:
+            if self._running:
+                await self.close()
+                logger.debug(f"[{self.id}] Client closed for refresh")
+
+            await self.init(
+                timeout=g_config.gemini.timeout,
+                watchdog_timeout=g_config.gemini.watchdog_timeout,
+                auto_refresh=g_config.gemini.auto_refresh,
+                verbose=g_config.gemini.verbose,
+                refresh_interval=g_config.gemini.refresh_interval,
+            )
+
+            if self.running():
+                logger.success(f"[{self.id}] Cookie refresh successful")
+                self.consecutive_failures = 0
+                return True
+            else:
+                logger.error(f"[{self.id}] Cookie refresh failed - client not running")
+                return False
+        except Exception:
+            logger.exception(f"[{self.id}] Error during cookie refresh")
+            return False

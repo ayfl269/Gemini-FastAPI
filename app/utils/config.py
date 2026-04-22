@@ -119,6 +119,11 @@ class GeminiConfig(BaseModel):
         default=ChatMode.NORMAL,
         description="Chat mode: 'normal' uses standard chats, 'temporary' uses Google's temporary mode (not saved to account) and enforces an effective input limit of 90% of max_chars_per_request",
     )
+    request_interval: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Minimum interval in seconds between requests per client to avoid rate limiting (0 to disable)",
+    )
 
     @field_validator("models", mode="before")
     @classmethod
